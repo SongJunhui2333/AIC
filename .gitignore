@@ -1,0 +1,12 @@
+__pycache__/
+.ruff_cache/
+.pytest_cache/
+runs/
+dataset/
+datasets/
+*.pt
+*.bmp
+*.png
+*.jpg
+*.jpeg
+*.csv
