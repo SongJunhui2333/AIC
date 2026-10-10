@@ -75,6 +75,19 @@ $discModel = Join-Path $discWorkspace "runs\baseline_v1\weights\best.pt"
 
 每次训练保留最佳/最终权重、参数 YAML、训练曲线、验证结果以及数据登记快照。验证集用于选择最佳模型和提前停止。
 
+### 旋转增强对照
+
+保持同一数据集、预训练权重和其他参数，在训练命令添加`--rotation`：
+
+```powershell
+python $discTool --workspace $discWorkspace train --data $discData --weights $discWeights --run smoke_rotation --epochs 2 --rotation
+python $discTool --workspace $discWorkspace train --data $discData --weights $discWeights --run rotation --rotation
+```
+
+训练加载时随机旋转−180°～180°，使用双线性插值和灰色114补边；扩展画布保留完整图像，再通过原训练变换缩放到320。斜向旋转会因新增补边而缩小画面中的圆盘。旋转角度以`degrees=180`保存在参数YAML中；不添加该选项时保持原基线流程。
+
+验证、测试和预测不旋转，沿用原处理。先检查训练图中的细线和圆盘边缘，再用相同验证/测试数据比较原模型与旋转模型。增强图不会另存为新实物样本，无需生成新的数据集版本；使用新的实验和报告名称保留原结果。
+
 ## 4. 独立评估与光照压力测试
 
 ```powershell

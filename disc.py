@@ -13,6 +13,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageEnhance, ImageOps
 from ultralytics.data.utils import IMG_FORMATS
+from ultralytics.models.yolo.classify import ClassificationTrainer
 
 CLASSES = {
     "black_spot": "内部黑色缺陷",
@@ -29,6 +30,22 @@ CONDITIONS = {
     "contrast_0.7": ("contrast", 0.7),
     "contrast_1.3": ("contrast", 1.3),
 }
+
+
+class RotationTrainer(ClassificationTrainer):
+    """Add full-frame rotation to training while retaining native validation and inference transforms."""
+
+    def build_dataset(self, img_path, mode="train", batch=None):
+        """Prepend rotation before the native full-area resize, leaving validation unchanged."""
+        dataset = super().build_dataset(img_path, mode, batch)
+        if mode == "train":
+            from torchvision.transforms import InterpolationMode, RandomRotation
+
+            dataset.torch_transforms.transforms.insert(
+                0,
+                RandomRotation(self.args.degrees, interpolation=InterpolationMode.BILINEAR, expand=True, fill=114),
+            )
+        return dataset
 
 
 def digest(path):
@@ -282,6 +299,7 @@ def train(args):
     if model.task != "classify":
         raise ValueError("Training requires -cls classification weights")
     model.train(
+        trainer=RotationTrainer if args.rotation else None,
         data=str(args.data.resolve()),
         epochs=args.epochs,
         imgsz=320,
@@ -290,6 +308,7 @@ def train(args):
         workers=0,
         patience=20,
         seed=42,
+        degrees=180.0 if args.rotation else 0.0,
         scale=0.0,
         auto_augment=None,
         erasing=0.0,
@@ -471,6 +490,9 @@ def main():
     command.add_argument("--weights", default="yolo11n-cls.pt")
     command.add_argument("--run", required=True)
     command.add_argument("--epochs", type=int, default=100)
+    command.add_argument(
+        "--rotation", action="store_true", help="Train with random full-frame rotations in [-180, 180]"
+    )
     command.add_argument("--device", default="0")
     command = commands.add_parser(
         "evaluate",
