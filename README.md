@@ -75,6 +75,20 @@ $discModel = Join-Path $discWorkspace "runs\baseline_v1\weights\best.pt"
 
 每次训练保留最佳/最终权重、参数 YAML、训练曲线、验证结果以及数据登记快照。验证集用于选择最佳模型和提前停止。
 
+### 输入尺寸与模型大小对照
+
+训练可通过`--imgsz`改变输入尺寸，默认仍为320；`--weights`可指定`yolo11s-cls.pt`等分类预训练权重。评估和预测自动沿用各模型权重保存的训练尺寸，不会将352模型强制缩放为320。
+
+对于补边后352×352的照片，可固定同一数据集和基线参数，分别测试以下配置。正式训练前给每种配置使用新名称运行`--epochs 2`短程检查；正式训练从对应预训练权重重新开始。
+
+```powershell
+python $discTool --workspace $discWorkspace train --data $discData --weights $discWeights --imgsz 352 --run size_n352
+python $discTool --workspace $discWorkspace train --data $discData --weights "yolo11s-cls.pt" --imgsz 320 --run size_s320
+python $discTool --workspace $discWorkspace train --data $discData --weights "yolo11s-cls.pt" --imgsz 352 --run size_s352
+```
+
+这些命令不叠加旋转，便于区分尺寸和模型容量的影响。先按验证集比较总体、各类及合成光照指标，记录模型选择，再对同一测试集一次性报告结果。提高尺寸不会产生原图中不存在的细节，较大模型也不保证准确率提高。使用新的实验名称，保留原基线和历史结果。
+
 ### 旋转增强对照
 
 保持同一数据集、预训练权重和其他参数，在训练命令添加`--rotation`：
@@ -84,7 +98,7 @@ python $discTool --workspace $discWorkspace train --data $discData --weights $di
 python $discTool --workspace $discWorkspace train --data $discData --weights $discWeights --run rotation --rotation
 ```
 
-训练加载时随机旋转−180°～180°，使用双线性插值和灰色114补边；扩展画布保留完整图像，再通过原训练变换缩放到320。斜向旋转会因新增补边而缩小画面中的圆盘。旋转角度以`degrees=180`保存在参数YAML中；不添加该选项时保持原基线流程。
+训练加载时随机旋转−180°～180°，使用双线性插值和灰色114补边；扩展画布保留完整图像，再通过原训练变换缩放到指定输入尺寸（默认320）。斜向旋转会因新增补边而缩小画面中的圆盘。旋转角度以`degrees=180`保存在参数YAML中；不添加该选项时保持原基线流程。
 
 验证、测试和预测不旋转，沿用原处理。先检查训练图中的细线和圆盘边缘，再用相同验证/测试数据比较原模型与旋转模型。增强图不会另存为新实物样本，无需生成新的数据集版本；使用新的实验和报告名称保留原结果。
 

@@ -302,7 +302,7 @@ def train(args):
         trainer=RotationTrainer if args.rotation else None,
         data=str(args.data.resolve()),
         epochs=args.epochs,
-        imgsz=320,
+        imgsz=args.imgsz,
         batch=16,
         device=args.device,
         workers=0,
@@ -337,7 +337,7 @@ def infer(model, images, device):
     """Use model-provided class IDs and the same full-image preprocessing for every prediction."""
     if model.task != "classify" or set(model.names.values()) != set(CLASSES):
         raise ValueError("Expected a trained classifier with exactly the four registered defect names")
-    results = model.predict(images, imgsz=320, batch=16, device=device, verbose=False)
+    results = model.predict(images, batch=16, device=device, verbose=False)
     return [(r.names[r.probs.top1], float(r.probs.top1conf)) for r in results]
 
 
@@ -490,6 +490,7 @@ def main():
     command.add_argument("--weights", default="yolo11n-cls.pt")
     command.add_argument("--run", required=True)
     command.add_argument("--epochs", type=int, default=100)
+    command.add_argument("--imgsz", type=int, default=320, help="Training input size; saved in weights for inference")
     command.add_argument(
         "--rotation", action="store_true", help="Train with random full-frame rotations in [-180, 180]"
     )
