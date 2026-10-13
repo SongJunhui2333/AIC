@@ -9,6 +9,7 @@ import json
 import random
 import shutil
 from collections import Counter, defaultdict
+from functools import partial
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageEnhance, ImageOps
@@ -38,7 +39,7 @@ class RotationTrainer(ClassificationTrainer):
     def build_dataset(self, img_path, mode="train", batch=None):
         """Prepend rotation before the native full-area resize, leaving validation unchanged."""
         dataset = super().build_dataset(img_path, mode, batch)
-        if mode == "train":
+        if mode == "train" and self.args.degrees:
             from torchvision.transforms import InterpolationMode, RandomRotation
 
             dataset.torch_transforms.transforms.insert(
@@ -46,6 +47,54 @@ class RotationTrainer(ClassificationTrainer):
                 RandomRotation(self.args.degrees, interpolation=InterpolationMode.BILINEAR, expand=True, fill=114),
             )
         return dataset
+
+
+class SyntheticTrainer(RotationTrainer):
+    """Control synthetic exposure without treating rotated files as independent real discs."""
+
+    def __init__(self, *args, synthetic_fraction, **kwargs):
+        """Keep the requested sampling fraction outside Ultralytics configuration arguments."""
+        self.synthetic_fraction = synthetic_fraction
+        super().__init__(*args, **kwargs)
+
+    def get_dataloader(self, dataset_path, batch_size=16, rank=-1, mode="train"):
+        """Use weighted sampling for training and preserve the native validation loader."""
+        loader = super().get_dataloader(dataset_path, batch_size, rank, mode)
+        if mode != "train":
+            return loader
+        if rank != -1 or not 0 < self.synthetic_fraction < 1:
+            raise ValueError("Synthetic sampling requires one device and a fraction strictly between 0 and 1")
+        import torch
+        from torch.utils.data import WeightedRandomSampler
+        from ultralytics.data.build import InfiniteDataLoader
+
+        root = Path(self.args.data)
+        rows = [r for r in read_csv(root / "manifest.csv") if r["split"] == "train"]
+        synthetic = {str((root / r["prepared_path"]).resolve()) for r in rows if r.get("data_kind") == "synthetic"}
+        real = len(loader.dataset) - len(synthetic)
+        weight = self.synthetic_fraction * real / ((1 - self.synthetic_fraction) * len(synthetic))
+        weights = [weight if str(Path(s[0]).resolve()) in synthetic else 1.0 for s in loader.dataset.samples]
+        samples = round(real / (1 - self.synthetic_fraction))
+        recipe = {
+            "synthetic_fraction": self.synthetic_fraction,
+            "real_images": real,
+            "synthetic_images": len(synthetic),
+            "samples_per_epoch": samples,
+            "synthetic_file_weight": weight,
+            "replacement": True,
+            "sampler_seed": self.args.seed,
+        }
+        (self.save_dir / "sampling.json").write_text(json.dumps(recipe, indent=2), encoding="utf-8")
+        sampler = WeightedRandomSampler(weights, samples, generator=torch.Generator().manual_seed(self.args.seed))
+        return InfiniteDataLoader(
+            loader.dataset,
+            batch_size=loader.batch_size,
+            sampler=sampler,
+            num_workers=loader.num_workers,
+            pin_memory=loader.pin_memory,
+            collate_fn=loader.collate_fn,
+            generator=loader.generator,
+        )
 
 
 def digest(path):
@@ -267,10 +316,21 @@ def snapshot(data):
     """Reject identity leakage, unexpected images, and changes to a prepared version."""
     rows = read_csv(data / "manifest.csv")
     groups = defaultdict(set)
+    real_train = {
+        (r["disc_id"], r["class_name"]) for r in rows if r["split"] == "train" and r.get("data_kind") != "synthetic"
+    }
     for row in rows:
-        if not row["disc_id"] or not row["lighting_id"]:
+        synthetic = row.get("data_kind") == "synthetic"
+        if synthetic and (
+            row["disc_id"]
+            or row["split"] != "train"
+            or not row.get("mother_id")
+            or (row.get("source_disc_id"), row["class_name"]) not in real_train
+        ):
+            raise ValueError("Synthetic images require a mother ID, no physical ID, and a matching training source")
+        if not row["lighting_id"] or (not synthetic and not row["disc_id"]):
             raise ValueError("Prepared snapshots require confirmed physical-disc and lighting IDs")
-        groups[row["disc_id"]].add((row["class_name"], row["split"]))
+        groups[("mother", row["mother_id"]) if synthetic else row["disc_id"]].add((row["class_name"], row["split"]))
         path = source_path(data, row["prepared_path"])
         if Path(row["prepared_path"]).parts[:2] != (row["split"], row["class_name"]):
             raise ValueError(f"Snapshot path/class mismatch: {row['prepared_path']}")
@@ -291,7 +351,7 @@ def train(args):
     """Train the existing YOLO classifier using a confirmed dataset snapshot."""
     from ultralytics import YOLO
 
-    snapshot(args.data)
+    rows = snapshot(args.data)
     run = args.workspace / "runs" / args.run
     if run.exists():
         raise FileExistsError(f"Choose a new --run: {run}")
@@ -299,7 +359,11 @@ def train(args):
     if model.task != "classify":
         raise ValueError("Training requires -cls classification weights")
     model.train(
-        trainer=RotationTrainer if args.rotation else None,
+        trainer=partial(SyntheticTrainer, synthetic_fraction=args.synthetic_fraction)
+        if any(r.get("data_kind") == "synthetic" for r in rows)
+        else RotationTrainer
+        if args.rotation
+        else None,
         data=str(args.data.resolve()),
         epochs=args.epochs,
         imgsz=args.imgsz,
@@ -491,6 +555,12 @@ def main():
     command.add_argument("--run", required=True)
     command.add_argument("--epochs", type=int, default=100)
     command.add_argument("--imgsz", type=int, default=320, help="Training input size; saved in weights for inference")
+    command.add_argument(
+        "--synthetic-fraction",
+        type=float,
+        default=0.25,
+        help="Expected synthetic share of weighted draws for mixed snapshots (single device)",
+    )
     command.add_argument(
         "--rotation", action="store_true", help="Train with random full-frame rotations in [-180, 180]"
     )

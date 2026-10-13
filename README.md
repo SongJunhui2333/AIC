@@ -102,6 +102,25 @@ python $discTool --workspace $discWorkspace train --data $discData --weights $di
 
 验证、测试和预测不旋转，沿用原处理。先检查训练图中的细线和圆盘边缘，再用相同验证/测试数据比较原模型与旋转模型。增强图不会另存为新实物样本，无需生成新的数据集版本；使用新的实验和报告名称保留原结果。
 
+### 合成图片与真实照片混合训练
+
+合成图片只加入新版本的训练目录，验证和测试保留真实照片。快照CSV仍使用原有字段，合成行另外填写
+`data_kind=synthetic`、全局唯一的`mother_id`和`source_disc_id`；`disc_id`留空，`split=train`。
+来源圆盘必须是同类别的真实训练圆盘。每张旋转图保留母图ID，不能分入验证或测试；高清母图不与其缩放版本重复加入。
+创建快照时，记录每个输出文件的`prepared_path`和`prepared_sha256`，并保留来源及角度字段。
+
+混合快照默认按期望25%的合成比例加权抽样；可使用`--synthetic-fraction 0.5`比较50%。支持单设备训练，
+不修改Ultralytics循环。每轮抽样数量约为真实训练图片数除以真实抽样比例，使用有放回抽样，实际每轮比例会波动。
+同一母图若拥有相同数量的角度文件，其总抽样权重相等；旋转版本不会登记成新的实物。
+`sampling.json`保存比例、抽样数量和随机种子；原有仅真实照片的训练方式保持不变。
+
+```powershell
+python $discTool --workspace $discWorkspace train --data "C:\path\to\mixed_snapshot" --weights $discWeights --imgsz 352 --synthetic-fraction 0.25 --run mixed25
+```
+
+离线旋转已经改变了画面方向和补边，本轮比较不再叠加`--rotation`。先用真实验证集选择比例和最佳模型，
+记录选择后再在同一真实测试集上比较；合成图预测准确率不用于证明实际收益。
+
 ## 4. 独立评估与光照压力测试
 
 ```powershell
