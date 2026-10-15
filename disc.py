@@ -312,7 +312,7 @@ def prepare(args):
     print(f"Prepared {destination}\nImages: {dict(Counter(r['split'] for r in ready))}")
 
 
-def snapshot(data):
+def snapshot(data, experimental=False):
     """Reject identity leakage, unexpected images, and changes to a prepared version."""
     rows = read_csv(data / "manifest.csv")
     groups = defaultdict(set)
@@ -323,7 +323,7 @@ def snapshot(data):
         synthetic = row.get("data_kind") == "synthetic"
         if synthetic and (
             row["disc_id"]
-            or row["split"] != "train"
+            or (row["split"] != "train" and not experimental)
             or not row.get("mother_id")
             or (row.get("source_disc_id"), row["class_name"]) not in real_train
         ):
@@ -351,7 +351,7 @@ def train(args):
     """Train the existing YOLO classifier using a confirmed dataset snapshot."""
     from ultralytics import YOLO
 
-    rows = snapshot(args.data)
+    rows = snapshot(args.data, args.command == "experiment")
     run = args.workspace / "runs" / args.run
     if run.exists():
         raise FileExistsError(f"Choose a new --run: {run}")
@@ -360,7 +360,7 @@ def train(args):
         raise ValueError("Training requires -cls classification weights")
     model.train(
         trainer=partial(SyntheticTrainer, synthetic_fraction=args.synthetic_fraction)
-        if any(r.get("data_kind") == "synthetic" for r in rows)
+        if args.command != "experiment" and any(r.get("data_kind") == "synthetic" for r in rows)
         else RotationTrainer
         if args.rotation
         else None,
@@ -385,6 +385,11 @@ def train(args):
         exist_ok=False,
     )
     shutil.copy2(args.data / "manifest.csv", model.trainer.save_dir / "manifest.csv")
+    if args.command == "experiment":
+        (model.trainer.save_dir / "selection.json").write_text(
+            json.dumps({"selection_source": "mixed_validation_only", "weights_sha256": digest(model.trainer.best)}),
+            encoding="utf-8",
+        )
     print(f"Best weights: {model.trainer.best}")
 
 
@@ -410,7 +415,8 @@ def evaluate(args):
     from ultralytics import YOLO
     from ultralytics.utils.metrics import ConfusionMatrix
 
-    rows = [r for r in snapshot(args.data) if r["split"] == args.split]
+    experimental = args.command == "experiment"
+    rows = [r for r in snapshot(args.data, experimental) if r["split"] == args.split]
     output = args.workspace / "reports" / args.run
     output.mkdir(parents=True)
     shutil.copy2(args.data / "manifest.csv", output / "manifest.csv")
@@ -419,17 +425,31 @@ def evaluate(args):
     summary = {
         "split": args.split,
         "images": len(rows),
-        "independent_discs": len({r["disc_id"] for r in rows}),
+        "independent_discs": len({r["disc_id"] for r in rows if r["disc_id"]}),
+        "synthetic_mothers": len({r["mother_id"] for r in rows if r.get("mother_id")}),
+        "experimental": experimental,
         "dataset_manifest_sha256": digest(args.data / "manifest.csv"),
         "models": [],
         "notice": "Rotated photos are correlated. Synthetic stress does not establish real cross-light accuracy.",
     }
     for number, weights in enumerate(args.models, 1):
         provenance = weights.parent.parent / "manifest.csv"
+        catalog = weights.parent / "model_catalog.json"
+        if catalog.exists():
+            record = next(
+                m for m in json.loads(catalog.read_text(encoding="utf-8"))["models"] if m["file"] == weights.name
+            )
+            if digest(weights) != record["sha256"]:
+                raise ValueError(f"Weights differ from the model catalog: {weights}")
+            provenance = weights.parent.parent / record["training_manifest"]
         if provenance.exists():
-            seen = {r["disc_id"] for r in read_csv(provenance) if r["split"] == "train"}
-            if seen & {r["disc_id"] for r in rows}:
+            training = [r for r in read_csv(provenance) if r["split"] == "train"]
+            seen = {r["disc_id"] for r in training if r["disc_id"]}
+            if seen & {r["disc_id"] for r in rows if r["disc_id"]}:
                 raise ValueError(f"Evaluation discs were used to train {weights}")
+            mothers = {r["mother_id"] for r in training if r.get("mother_id")}
+            if mothers & {r["mother_id"] for r in rows if r.get("mother_id")}:
+                raise ValueError(f"Evaluation synthetic mothers were used to train {weights}")
         model = YOLO(str(weights))
         model_id = str(weights.resolve())
         model_dir = output / f"model_{number}"
@@ -448,6 +468,8 @@ def evaluate(args):
                         "condition": name,
                         "path": row["path"],
                         "disc_id": row["disc_id"],
+                        "data_kind": row.get("data_kind") or "real",
+                        "mother_id": row.get("mother_id", ""),
                         "lighting_id": row["lighting_id"],
                         "true_class": row["class_name"],
                         "predicted_class": predicted,
@@ -462,8 +484,14 @@ def evaluate(args):
             for entry in entries:
                 groups[("overall", "all")].append(entry)
                 for scope in ("true_class", "lighting_id", "disc_id"):
-                    groups[(scope, entry[scope])].append(entry)
+                    if entry[scope]:
+                        groups[(scope, entry[scope])].append(entry)
                 groups[("lighting_class", f"{entry['lighting_id']}/{entry['true_class']}")].append(entry)
+                if experimental:
+                    groups[("data_kind", entry["data_kind"])].append(entry)
+                    groups[("domain_class", f"{entry['data_kind']}/{entry['true_class']}")].append(entry)
+                    if entry["mother_id"]:
+                        groups[("mother_id", entry["mother_id"])].append(entry)
             for (scope, group), values in groups.items():
                 correct = sum(v["correct"] for v in values)
                 accuracy = correct / len(values)
@@ -475,7 +503,7 @@ def evaluate(args):
                     "scope": scope,
                     "group": group,
                     "images": len(values),
-                    "independent_discs": len({v["disc_id"] for v in values}),
+                    "independent_discs": len({v["disc_id"] for v in values if v["disc_id"]}),
                     "correct": correct,
                     "top1": accuracy,
                     "delta_from_original": accuracy - base[(scope, group)],
@@ -484,7 +512,11 @@ def evaluate(args):
             folder = model_dir / name
             folder.mkdir()
             confusion.plot(normalize=False, save_dir=folder)
-        real = [m for m in model_metrics if m["condition"] == "original" and m["scope"] == "lighting_id"]
+        real = [
+            m
+            for m in model_metrics
+            if m["condition"] == "original" and m["scope"] == "lighting_id" and m["independent_discs"]
+        ]
         summary["models"].append(
             {
                 "weights": model_id,
@@ -575,6 +607,15 @@ def main():
     command.add_argument("--split", choices=("val", "test"), default="test")
     command.add_argument("--stress", action="store_true")
     command.add_argument("--device", default="0")
+    command = commands.add_parser("experiment", help="Explicit mixed real/synthetic training and evaluation")
+    command.add_argument("phase", choices=("train", "val", "test"))
+    command.add_argument("--data", type=Path, required=True)
+    command.add_argument("--run", required=True, help="Unique training name or evaluation report name")
+    command.add_argument("--weights", default="yolo11n-cls.pt")
+    command.add_argument("--models", type=Path, nargs="+", help="Required for val/test")
+    command.add_argument("--epochs", type=int, default=100)
+    command.add_argument("--device", default="0")
+    command.add_argument("--stress", action="store_true")
     command = commands.add_parser("predict", help="Predict a file or directory to CSV")
     command.add_argument("input", type=Path)
     command.add_argument("--model", type=Path, required=True)
@@ -591,7 +632,14 @@ def main():
             parser.error(f"--{field} must be a single directory name")
     if hasattr(args, "data"):
         args.data = args.data.resolve()
-    globals()[args.command](args)
+    if args.command == "experiment":
+        args.imgsz, args.rotation = 352, False
+        if args.phase != "train" and not args.models:
+            parser.error("experiment val/test requires --models")
+        args.split = args.phase
+        (train if args.phase == "train" else evaluate)(args)
+    else:
+        globals()[args.command](args)
 
 
 if __name__ == "__main__":
