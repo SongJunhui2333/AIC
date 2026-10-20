@@ -1,4 +1,4 @@
-"""Prepare, train, evaluate, and predict disc defects without splitting photographs of the same physical disc."""
+"""Manage disc-defect classification with physical-disc and explicit known-disc capture-group experiments."""
 
 from __future__ import annotations
 
@@ -44,7 +44,12 @@ class RotationTrainer(ClassificationTrainer):
 
             dataset.torch_transforms.transforms.insert(
                 0,
-                RandomRotation(self.args.degrees, interpolation=InterpolationMode.BILINEAR, expand=True, fill=114),
+                RandomRotation(
+                    self.args.degrees,
+                    interpolation=InterpolationMode.BILINEAR,
+                    expand=True,
+                    fill=114,
+                ),
             )
         return dataset
 
@@ -312,8 +317,10 @@ def prepare(args):
     print(f"Prepared {destination}\nImages: {dict(Counter(r['split'] for r in ready))}")
 
 
-def snapshot(data, experimental=False):
+def snapshot(data, experimental=False, known_discs=False):
     """Reject identity leakage, unexpected images, and changes to a prepared version."""
+    if known_discs and not experimental:
+        raise ValueError("Known-disc capture groups require the explicit experiment command")
     rows = read_csv(data / "manifest.csv")
     groups = defaultdict(set)
     real_train = {
@@ -330,14 +337,22 @@ def snapshot(data, experimental=False):
             raise ValueError("Synthetic images require a mother ID, no physical ID, and a matching training source")
         if not row["lighting_id"] or (not synthetic and not row["disc_id"]):
             raise ValueError("Prepared snapshots require confirmed physical-disc and lighting IDs")
-        groups[("mother", row["mother_id"]) if synthetic else row["disc_id"]].add((row["class_name"], row["split"]))
+        if known_discs:
+            if not row.get("capture_group"):
+                raise ValueError("Known-disc experiments require a capture/lineage group for every image")
+            groups[("capture", row["capture_group"])].add((row["class_name"], row["split"]))
+        if synthetic or not known_discs:
+            groups[("mother", row["mother_id"]) if synthetic else row["disc_id"]].add((row["class_name"], row["split"]))
+        else:
+            groups[("disc_class", row["disc_id"])].add((row["class_name"],))
+        groups[("content", row["prepared_sha256"])].add((row["class_name"], row["split"]))
         path = source_path(data, row["prepared_path"])
         if Path(row["prepared_path"]).parts[:2] != (row["split"], row["class_name"]):
             raise ValueError(f"Snapshot path/class mismatch: {row['prepared_path']}")
         if digest(path) != row["prepared_sha256"]:
             raise ValueError(f"Prepared photograph changed: {path}")
     if any(len(assignments) != 1 for assignments in groups.values()):
-        raise ValueError("A physical disc appears in multiple classes or splits")
+        raise ValueError("A physical disc, capture group, mother or identical image has conflicting assignments")
     expected = {r["prepared_path"] for r in rows}
     actual = {p.relative_to(data).as_posix() for split in SPLITS for p in images_in(data / split)}
     if len(expected) != len(rows) or actual != expected:
@@ -351,7 +366,7 @@ def train(args):
     """Train the existing YOLO classifier using a confirmed dataset snapshot."""
     from ultralytics import YOLO
 
-    rows = snapshot(args.data, args.command == "experiment")
+    rows = snapshot(args.data, args.command == "experiment", getattr(args, "known_discs", False))
     run = args.workspace / "runs" / args.run
     if run.exists():
         raise FileExistsError(f"Choose a new --run: {run}")
@@ -387,7 +402,12 @@ def train(args):
     shutil.copy2(args.data / "manifest.csv", model.trainer.save_dir / "manifest.csv")
     if args.command == "experiment":
         (model.trainer.save_dir / "selection.json").write_text(
-            json.dumps({"selection_source": "mixed_validation_only", "weights_sha256": digest(model.trainer.best)}),
+            json.dumps(
+                {
+                    "selection_source": "mixed_validation_only",
+                    "weights_sha256": digest(model.trainer.best),
+                }
+            ),
             encoding="utf-8",
         )
     print(f"Best weights: {model.trainer.best}")
@@ -411,12 +431,13 @@ def infer(model, images, device):
 
 
 def evaluate(args):
-    """Evaluate models on identical held-out physical discs, with optional synthetic lighting stress."""
+    """Evaluate held-out discs or explicitly requested capture groups with optional synthetic lighting stress."""
     from ultralytics import YOLO
     from ultralytics.utils.metrics import ConfusionMatrix
 
     experimental = args.command == "experiment"
-    rows = [r for r in snapshot(args.data, experimental) if r["split"] == args.split]
+    known_discs = getattr(args, "known_discs", False)
+    rows = [r for r in snapshot(args.data, experimental, known_discs) if r["split"] == args.split]
     output = args.workspace / "reports" / args.run
     output.mkdir(parents=True)
     shutil.copy2(args.data / "manifest.csv", output / "manifest.csv")
@@ -428,9 +449,15 @@ def evaluate(args):
         "independent_discs": len({r["disc_id"] for r in rows if r["disc_id"]}),
         "synthetic_mothers": len({r["mother_id"] for r in rows if r.get("mother_id")}),
         "experimental": experimental,
+        "evaluation_protocol": "known_disc_capture_blocks" if known_discs else "physical_disc_holdout",
         "dataset_manifest_sha256": digest(args.data / "manifest.csv"),
         "models": [],
-        "notice": "Rotated photos are correlated. Synthetic stress does not establish real cross-light accuracy.",
+        "notice": (
+            "Known discs occur in training and evaluation; capture blocks are held out, not physical objects. "
+            if known_discs
+            else ""
+        )
+        + "Rotated photos are correlated. Synthetic stress does not establish real cross-light accuracy.",
     }
     for number, weights in enumerate(args.models, 1):
         provenance = weights.parent.parent / "manifest.csv"
@@ -444,9 +471,12 @@ def evaluate(args):
             provenance = weights.parent.parent / record["training_manifest"]
         if provenance.exists():
             training = [r for r in read_csv(provenance) if r["split"] == "train"]
-            seen = {r["disc_id"] for r in training if r["disc_id"]}
-            if seen & {r["disc_id"] for r in rows if r["disc_id"]}:
-                raise ValueError(f"Evaluation discs were used to train {weights}")
+            unit = "capture_group" if known_discs else "disc_id"
+            seen = {r[unit] for r in training if r.get(unit)}
+            if seen & {r[unit] for r in rows if r.get(unit)}:
+                raise ValueError(f"Evaluation {unit} values were used to train {weights}")
+            if {r["prepared_sha256"] for r in training} & {r["prepared_sha256"] for r in rows}:
+                raise ValueError(f"Evaluation image contents were used to train {weights}")
             mothers = {r["mother_id"] for r in training if r.get("mother_id")}
             if mothers & {r["mother_id"] for r in rows if r.get("mother_id")}:
                 raise ValueError(f"Evaluation synthetic mothers were used to train {weights}")
@@ -470,6 +500,7 @@ def evaluate(args):
                         "disc_id": row["disc_id"],
                         "data_kind": row.get("data_kind") or "real",
                         "mother_id": row.get("mother_id", ""),
+                        "capture_group": row.get("capture_group", ""),
                         "lighting_id": row["lighting_id"],
                         "true_class": row["class_name"],
                         "predicted_class": predicted,
@@ -586,7 +617,12 @@ def main():
     command.add_argument("--weights", default="yolo11n-cls.pt")
     command.add_argument("--run", required=True)
     command.add_argument("--epochs", type=int, default=100)
-    command.add_argument("--imgsz", type=int, default=320, help="Training input size; saved in weights for inference")
+    command.add_argument(
+        "--imgsz",
+        type=int,
+        default=320,
+        help="Training input size; saved in weights for inference",
+    )
     command.add_argument(
         "--synthetic-fraction",
         type=float,
@@ -594,7 +630,9 @@ def main():
         help="Expected synthetic share of weighted draws for mixed snapshots (single device)",
     )
     command.add_argument(
-        "--rotation", action="store_true", help="Train with random full-frame rotations in [-180, 180]"
+        "--rotation",
+        action="store_true",
+        help="Train with random full-frame rotations in [-180, 180]",
     )
     command.add_argument("--device", default="0")
     command = commands.add_parser(
@@ -616,6 +654,11 @@ def main():
     command.add_argument("--epochs", type=int, default=100)
     command.add_argument("--device", default="0")
     command.add_argument("--stress", action="store_true")
+    command.add_argument(
+        "--known-discs",
+        action="store_true",
+        help="Adapt known physical discs using isolated capture/lineage groups; not unseen-object evaluation",
+    )
     command = commands.add_parser("predict", help="Predict a file or directory to CSV")
     command.add_argument("input", type=Path)
     command.add_argument("--model", type=Path, required=True)
