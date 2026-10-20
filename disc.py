@@ -13,6 +13,7 @@ from functools import partial
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageEnhance, ImageOps
+
 from ultralytics.data.utils import IMG_FORMATS
 from ultralytics.models.yolo.classify import ClassificationTrainer
 
@@ -71,6 +72,7 @@ class SyntheticTrainer(RotationTrainer):
             raise ValueError("Synthetic sampling requires one device and a fraction strictly between 0 and 1")
         import torch
         from torch.utils.data import WeightedRandomSampler
+
         from ultralytics.data.build import InfiniteDataLoader
 
         root = Path(self.args.data)
