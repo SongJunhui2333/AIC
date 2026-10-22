@@ -334,11 +334,20 @@ def snapshot(data, experimental=False, known_discs=False):
             row["disc_id"]
             or (row["split"] != "train" and not experimental)
             or not row.get("mother_id")
-            or (row.get("source_disc_id"), row["class_name"]) not in real_train
+            or (
+                (row.get("source_disc_id"), row["class_name"]) not in real_train
+                and not (
+                    known_discs
+                    and row.get("source_role") == "appearance_reference"
+                    and any(disc == row.get("source_disc_id") for disc, _ in real_train)
+                )
+            )
         ):
             raise ValueError("Synthetic images require a mother ID, no physical ID, and a matching training source")
         if not row["lighting_id"] or (not synthetic and not row["disc_id"]):
             raise ValueError("Prepared snapshots require confirmed physical-disc and lighting IDs")
+        if row.get("shared_ancestry_group_id"):
+            groups[("ancestry", row["shared_ancestry_group_id"])].add((row["split"],))
         if known_discs:
             if not row.get("capture_group"):
                 raise ValueError("Known-disc experiments require a capture/lineage group for every image")
@@ -479,9 +488,10 @@ def evaluate(args):
                 raise ValueError(f"Evaluation {unit} values were used to train {weights}")
             if {r["prepared_sha256"] for r in training} & {r["prepared_sha256"] for r in rows}:
                 raise ValueError(f"Evaluation image contents were used to train {weights}")
-            mothers = {r["mother_id"] for r in training if r.get("mother_id")}
-            if mothers & {r["mother_id"] for r in rows if r.get("mother_id")}:
-                raise ValueError(f"Evaluation synthetic mothers were used to train {weights}")
+            for unit in ("mother_id", "shared_ancestry_group_id"):
+                seen = {r[unit] for r in training if r.get(unit)}
+                if seen & {r[unit] for r in rows if r.get(unit)}:
+                    raise ValueError(f"Evaluation {unit} values were used to train {weights}")
         model = YOLO(str(weights))
         model_id = str(weights.resolve())
         model_dir = output / f"model_{number}"
