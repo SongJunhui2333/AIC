@@ -116,6 +116,12 @@ python $discTool --workspace $discWorkspace train --data $discData --weights $di
 这不会放宽正式实物隔离训练的来源要求，也不能将外部照片猜测登记为已有圆盘。参考照片及其后代参与训练后，
 该参考不能继续作为独立外部测试证据；外部实物身份未确认时，不声称验证了未见实物。
 
+按目录标签导入、尚未确认实物身份或采集来源的图片使用 `data_kind=external`、
+`source_role=external_labeled_image`；`disc_id` 和 `source_disc_id` 留空。与外部参考相同，必须记录来源
+SHA-256、共同来源组和明确的光照标记（未知时标为未登记），并且只允许通过 `experiment --known-discs`
+进入训练集。已确认的实物登记表不填入猜测的身份。外部图片单独计数，不当作已确认真实圆盘或合成图片；
+旋转副本和共同祖先整组管理，已参与训练的导入图片只能用于拟合检查。
+
 创建快照时，记录每个输出文件的`prepared_path`和`prepared_sha256`，并保留来源及角度字段。
 
 混合快照默认按期望25%的合成比例加权抽样；可使用`--synthetic-fraction 0.5`比较50%。支持单设备训练，
