@@ -197,6 +197,32 @@ python $discTool --workspace $discWorkspace evaluate --data $discDataV2 --models
 
 补拍同一实物能扩充光照覆盖，不会增加独立圆盘数量。跨光照能力以真实条件下的分组指标衡量；本项目不预设未经实测支持的准确率保证。
 
+## V15：加入近边缘白色缺陷后重新划分
+
+本地实验 `v15_regrouped_all_20261023` 复用现有训练入口，纳入 V14 的 7000 张有效图片，
+以及 `white_near_rim_batch_v2_20261023`、`white_near_rim_large_batch_v1_20261023` 各 240 张局部角度图。
+共 7480 张：1280 张已登记真实照片、5280 张合成角度图、920 张已标注外部图片。
+高清母图和预览不重复计入；外部无标签的 12 张仍排除。
+
+固定种子 42，按已记录来源的连通组重新分配，目标比例为 70%/15%/15%，实际为
+5358/1061/1061 张。大来源组不可拆分，因此实际比例和各域类别数量并不完全均衡。
+同一拍摄组、母图及已记录的共同参考来源保持在同一集合；数据快照保留旧归属、来源连接及分配记录。
+这仍是现有圆盘的适配实验，不能解释为未见实物测试。
+
+在包含照片和模型的项目根目录，使用已有 YOLO 环境运行；CPU 将设备改为 `cpu`，每次使用新运行名称：
+
+```powershell
+python disc.py --workspace disc-experiment experiment train --known-discs --data disc-experiment/datasets/v15_regrouped_all_20261023 --weights yolo11n-cls.pt --run teammate_v15_smoke_001 --epochs 2 --device 0
+python disc.py --workspace disc-experiment experiment train --known-discs --data disc-experiment/datasets/v15_regrouped_all_20261023 --weights yolo11n-cls.pt --run teammate_v15_full_001 --epochs 100 --device 0
+python disc.py --workspace disc-experiment experiment test --known-discs --data disc-experiment/datasets/v15_regrouped_all_20261023 --models models/known_discs_regrouped_n352_v15_20261023.pt --run teammate_v15_test_001 --stress --device 0
+```
+
+正式训练从原始预训练权重开始，以验证集选择 `best.pt`；测试集不更新参数。
+准备和分组配方保存在本地 `disc-experiment/checks/regroup_v15_20261023/`，不提交照片或实验产物。
+新近边缘图与原有近边缘图共享祖先，必须整组处理；若该组进入训练，其识别结果仅作拟合检查。
+历史 V14 模型训练过新留出集中的部分图片，同集比较须列出暴露情况，不能作为独立公平排名。
+真实照片仍仅记录 L0 光照，多光照能力尚未验证。
+
 ## 实现边界
 
 随机按照片划分的现有工具不能保证实物隔离，也不保存追加采集的光照信息。本项目只增加一个独立脚本，复用 Ultralytics 训练、预测和混淆矩阵绘图，以及 Pillow 的补边/增强功能。登记、版本快照和分组报告集中在同一个入口，避免修改框架或创建新的训练循环。
