@@ -330,6 +330,15 @@ def snapshot(data, experimental=False, known_discs=False):
     }
     for row in rows:
         synthetic = row.get("data_kind") == "synthetic"
+        external_reference = (
+            known_discs
+            and row.get("source_role") == "external_appearance_reference"
+            and not row.get("source_disc_id")
+            and row["split"] == "train"
+            and row.get("shared_ancestry_group_id")
+            and len(row.get("source_sha256", "")) == 64
+            and set(row["source_sha256"]) <= set("0123456789abcdef")
+        )
         if synthetic and (
             row["disc_id"]
             or (row["split"] != "train" and not experimental)
@@ -341,9 +350,10 @@ def snapshot(data, experimental=False, known_discs=False):
                     and row.get("source_role") == "appearance_reference"
                     and any(disc == row.get("source_disc_id") for disc, _ in real_train)
                 )
+                and not external_reference
             )
         ):
-            raise ValueError("Synthetic images require a mother ID, no physical ID, and a matching training source")
+            raise ValueError("Synthetic images require a mother ID, no physical ID, and a registered training source")
         if not row["lighting_id"] or (not synthetic and not row["disc_id"]):
             raise ValueError("Prepared snapshots require confirmed physical-disc and lighting IDs")
         if row.get("shared_ancestry_group_id"):
