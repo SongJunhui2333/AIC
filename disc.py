@@ -421,6 +421,16 @@ def train(args):
         hsv_s=0.0,
         hsv_v=0.3,
         amp=False,
+        **(
+            {
+                "optimizer": args.optimizer,
+                "lr0": args.lr0,
+                "momentum": args.momentum,
+                "warmup_bias_lr": args.warmup_bias_lr,
+            }
+            if args.command == "experiment"
+            else {}
+        ),
         project=str(run.parent),
         name=run.name,
         exist_ok=False,
@@ -680,6 +690,10 @@ def main():
     command.add_argument("--models", type=Path, nargs="+", help="Required for val/test")
     command.add_argument("--epochs", type=int, default=100)
     command.add_argument("--device", default="0")
+    command.add_argument("--optimizer", choices=("auto", "AdamW", "SGD"), default="auto")
+    command.add_argument("--lr0", type=float, default=0.01, help="Initial learning rate; auto optimizer overrides it")
+    command.add_argument("--momentum", type=float, default=0.937, help="Momentum or AdamW beta1")
+    command.add_argument("--warmup-bias-lr", type=float, default=0.1)
     command.add_argument("--stress", action="store_true")
     command.add_argument(
         "--known-discs",
