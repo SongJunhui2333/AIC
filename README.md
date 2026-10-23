@@ -110,7 +110,7 @@ python $discTool --workspace $discWorkspace train --data $discData --weights $di
 `data_kind=synthetic`、全局唯一的`mother_id`和`source_disc_id`；`disc_id`留空，`split=train`。
 来源圆盘必须是同类别的真实训练圆盘。每张旋转图保留母图ID，不能分入验证或测试；高清母图不与其缩放版本重复加入。
 
-在明确使用 `experiment --known-discs` 的适配实验中，未知实物身份的外部外观参考后代可仅进入训练集。清单须将
+在明确使用 `experiment --known-discs` 的适配实验中，未知实物身份的外部外观参考后代可按来源整组划分。清单须将
 `source_role` 标为 `external_appearance_reference`，`source_disc_id` 留空，并记录有效的 `source_sha256` 和非空的
 `shared_ancestry_group_id`。仍须记录母图、拍摄来源组和合成光照标记；同一母图及共同来源组不得跨集合。
 这不会放宽正式实物隔离训练的来源要求，也不能将外部照片猜测登记为已有圆盘。参考照片及其后代参与训练后，
@@ -119,8 +119,15 @@ python $discTool --workspace $discWorkspace train --data $discData --weights $di
 按目录标签导入、尚未确认实物身份或采集来源的图片使用 `data_kind=external`、
 `source_role=external_labeled_image`；`disc_id` 和 `source_disc_id` 留空。与外部参考相同，必须记录来源
 SHA-256、共同来源组和明确的光照标记（未知时标为未登记），并且只允许通过 `experiment --known-discs`
-进入训练集。已确认的实物登记表不填入猜测的身份。外部图片单独计数，不当作已确认真实圆盘或合成图片；
-旋转副本和共同祖先整组管理，已参与训练的导入图片只能用于拟合检查。
+进入适配实验。已确认的实物登记表不填入猜测的身份。外部图片单独计数，不当作已确认真实圆盘或合成图片；
+旋转副本、参考照片及已记录的共同祖先必须整组管理。同一来源组只能属于一个集合，不能将衍生图片与其参考
+分别用于训练和验证、测试；相同物理圆盘仍可出现在不同拍摄组中，这不属于未见实物评估。
+
+重新划分时另建不可覆盖的快照，保留原有字段和历史归属，并将同一拍摄组、母图、参考内容校验值及共同祖先
+连接成来源组，保存到 `shared_ancestry_group_id`。使用固定随机种子，以约70%/15%/15%为目标分配整个来源组，
+记录实际数量；共享参考的大组可能使比例及各域类别覆盖不均衡。验证集选择权重后再评估测试集，分别报告
+真实、合成与外部图片。只有新模型未参与训练的来源组才能作为该模型的留出评估；历史模型若训练过新测试图片，
+不能直接用它们的准确率作公平排名。未登记的外部实物身份也不能靠旋转内容分组得到确认。
 
 创建快照时，记录每个输出文件的`prepared_path`和`prepared_sha256`，并保留来源及角度字段。
 
