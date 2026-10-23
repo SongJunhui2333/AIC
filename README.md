@@ -223,6 +223,32 @@ python disc.py --workspace disc-experiment experiment test --known-discs --data 
 历史 V14 模型训练过新留出集中的部分图片，同集比较须列出暴露情况，不能作为独立公平排名。
 真实照片仍仅记录 L0 光照，多光照能力尚未验证。
 
+## V16：补充验证覆盖并比较学习率
+
+实验训练入口可显式传入 `--optimizer`、`--lr0`、`--momentum` 和 `--warmup-bias-lr`，
+直接复用 Ultralytics 的同名参数。默认仍为 `auto`；自动优化器会覆盖指定的学习率，比较学习率时须选择
+`AdamW` 或 `SGD`。这些选项只用于 `experiment`，正式实物隔离训练的默认参数保持不变。
+
+本地 V16 保留 V15 的全部 5358 张训练图与 1061 张测试图，新增 20 张独立来源白色缺陷母图的
+240 张局部旋转图，仅补充验证集至 1301 张，快照总计 7720 张。新增图参考旧验证集中 20 个不同来源组，
+与训练来源组隔离；10 张母图为小尺寸内部缺陷，10 张为近边缘内部缺陷，后者保留明显灰色间隔。
+母图及其全部角度、参考来源必须保持在验证集合；生成更多图片不等于增加真实实物。
+
+两组都从原始预训练权重开始，使用 AdamW、`momentum=0.9`、`warmup_bias_lr=0.0`，只比较
+`lr0=0.00125` 与 `lr0=0.0003`。每组的 `best.pt` 由同一验证集选择；再按验证 Top-1 选择候选，
+同分时选较低学习率，固定权重校验值后才评估测试集。100 轮上限、提前停止 20 轮及其他既有参数不变。
+
+```powershell
+python disc.py --workspace disc-experiment experiment train --known-discs --data disc-experiment/datasets/v16_validation_lr_20261023 --weights yolo11n-cls.pt --run teammate_v16_lr125_001 --epochs 100 --device 0 --optimizer AdamW --lr0 0.00125 --momentum 0.9 --warmup-bias-lr 0.0
+python disc.py --workspace disc-experiment experiment train --known-discs --data disc-experiment/datasets/v16_validation_lr_20261023 --weights yolo11n-cls.pt --run teammate_v16_lr030_001 --epochs 100 --device 0 --optimizer AdamW --lr0 0.0003 --momentum 0.9 --warmup-bias-lr 0.0
+```
+
+短程检查改为 `--epochs 2` 并使用新运行名称；CPU 改为 `--device cpu`。
+验证补充图和提示词位于本地 `dataset/synthetic/white_validation_independent_v1_20261023/`，
+数据与参数审计位于 `disc-experiment/checks/validation_lr_v16_20261023/`。
+真实圆盘仍只有原有 12 个，且仅有 L0；既有测试已反复查看，此比较属于已知圆盘研究，不能声称盲测或新实物泛化。
+训练、验证、测试及历史模型的实际来源暴露必须在报告中分别列出。
+
 ## 实现边界
 
 随机按照片划分的现有工具不能保证实物隔离，也不保存追加采集的光照信息。本项目只增加一个独立脚本，复用 Ultralytics 训练、预测和混淆矩阵绘图，以及 Pillow 的补边/增强功能。登记、版本快照和分组报告集中在同一个入口，避免修改框架或创建新的训练循环。
