@@ -326,19 +326,25 @@ def snapshot(data, experimental=False, known_discs=False):
     rows = read_csv(data / "manifest.csv")
     groups = defaultdict(set)
     real_train = {
-        (r["disc_id"], r["class_name"]) for r in rows if r["split"] == "train" and r.get("data_kind") != "synthetic"
+        (r["disc_id"], r["class_name"])
+        for r in rows
+        if r["split"] == "train" and r.get("data_kind") != "synthetic" and r["disc_id"]
     }
     for row in rows:
         synthetic = row.get("data_kind") == "synthetic"
+        external = row.get("data_kind") == "external"
         external_reference = (
             known_discs
-            and row.get("source_role") == "external_appearance_reference"
+            and row.get("source_role") == ("external_labeled_image" if external else "external_appearance_reference")
             and not row.get("source_disc_id")
+            and not row["disc_id"]
             and row["split"] == "train"
             and row.get("shared_ancestry_group_id")
             and len(row.get("source_sha256", "")) == 64
             and set(row["source_sha256"]) <= set("0123456789abcdef")
         )
+        if external and not external_reference:
+            raise ValueError("External labeled images require train-only provenance in a known-disc experiment")
         if synthetic and (
             row["disc_id"]
             or (row["split"] != "train" and not experimental)
@@ -354,7 +360,7 @@ def snapshot(data, experimental=False, known_discs=False):
             )
         ):
             raise ValueError("Synthetic images require a mother ID, no physical ID, and a registered training source")
-        if not row["lighting_id"] or (not synthetic and not row["disc_id"]):
+        if not row["lighting_id"] or (not synthetic and not external and not row["disc_id"]):
             raise ValueError("Prepared snapshots require confirmed physical-disc and lighting IDs")
         if row.get("shared_ancestry_group_id"):
             groups[("ancestry", row["shared_ancestry_group_id"])].add((row["split"],))
@@ -364,7 +370,7 @@ def snapshot(data, experimental=False, known_discs=False):
             groups[("capture", row["capture_group"])].add((row["class_name"], row["split"]))
         if synthetic or not known_discs:
             groups[("mother", row["mother_id"]) if synthetic else row["disc_id"]].add((row["class_name"], row["split"]))
-        else:
+        elif row["disc_id"]:
             groups[("disc_class", row["disc_id"])].add((row["class_name"],))
         groups[("content", row["prepared_sha256"])].add((row["class_name"], row["split"]))
         path = source_path(data, row["prepared_path"])
