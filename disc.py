@@ -338,13 +338,12 @@ def snapshot(data, experimental=False, known_discs=False):
             and row.get("source_role") == ("external_labeled_image" if external else "external_appearance_reference")
             and not row.get("source_disc_id")
             and not row["disc_id"]
-            and row["split"] == "train"
             and row.get("shared_ancestry_group_id")
             and len(row.get("source_sha256", "")) == 64
             and set(row["source_sha256"]) <= set("0123456789abcdef")
         )
         if external and not external_reference:
-            raise ValueError("External labeled images require train-only provenance in a known-disc experiment")
+            raise ValueError("External labeled images require grouped provenance in a known-disc experiment")
         if synthetic and (
             row["disc_id"]
             or (row["split"] != "train" and not experimental)
