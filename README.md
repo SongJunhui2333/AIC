@@ -109,6 +109,13 @@ python $discTool --workspace $discWorkspace train --data $discData --weights $di
 合成图片只加入新版本的训练目录，验证和测试保留真实照片。快照CSV仍使用原有字段，合成行另外填写
 `data_kind=synthetic`、全局唯一的`mother_id`和`source_disc_id`；`disc_id`留空，`split=train`。
 来源圆盘必须是同类别的真实训练圆盘。每张旋转图保留母图ID，不能分入验证或测试；高清母图不与其缩放版本重复加入。
+
+在明确使用 `experiment --known-discs` 的适配实验中，未知实物身份的外部外观参考后代可仅进入训练集。清单须将
+`source_role` 标为 `external_appearance_reference`，`source_disc_id` 留空，并记录有效的 `source_sha256` 和非空的
+`shared_ancestry_group_id`。仍须记录母图、拍摄来源组和合成光照标记；同一母图及共同来源组不得跨集合。
+这不会放宽正式实物隔离训练的来源要求，也不能将外部照片猜测登记为已有圆盘。参考照片及其后代参与训练后，
+该参考不能继续作为独立外部测试证据；外部实物身份未确认时，不声称验证了未见实物。
+
 创建快照时，记录每个输出文件的`prepared_path`和`prepared_sha256`，并保留来源及角度字段。
 
 混合快照默认按期望25%的合成比例加权抽样；可使用`--synthetic-fraction 0.5`比较50%。支持单设备训练，
