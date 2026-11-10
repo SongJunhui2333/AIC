@@ -249,6 +249,25 @@ python disc.py --workspace disc-experiment experiment train --known-discs --data
 真实圆盘仍只有原有 12 个，且仅有 L0；既有测试已反复查看，此比较属于已知圆盘研究，不能声称盲测或新实物泛化。
 训练、验证、测试及历史模型的实际来源暴露必须在报告中分别列出。
 
+## 多标签圆盘分类
+
+`disc_multilabel.py` 从完整圆盘照片输出所有达到阈值的缺陷类别和四类分数。DINOv2 ViT-S/14 与 YOLO11n-cls 都冻结特征提取部分，只训练四输出分类头。当前实验使用相同的 600 个训练步骤、种子 42 和类别阈值 0.5。混合组每批抽取 10 张实拍和 6 张合成图，先抽取合成母图，再抽取其角度。
+
+数据清单中的图片路径相对于 `--root`。清单列为 `path`、`data_kind`、`group_id`、`split`、`sha256` 和 `black_spot`、`notch`、`polyline`、`white_spot`。每种缺陷用 `0/1` 表示，实拍按实物分组，合成图按母图分组。正式批次的图纸布局和参考实物划分由制备清单记录。
+
+从项目交接目录运行，`$entry` 指向本仓库的脚本，`$dinoSource` 指向已解包的官方 DINOv2 源码目录。
+
+```powershell
+$data = 'dataset/synthetic/multi_defect_drawing_v1/training_manifest.csv'
+$weights = 'models/dinov2_vits14_pretrain.pth'
+$head = 'disc-experiment/runs/multilabel_v1/dinov2_mixed.pt'
+python $entry train --data $data --backbone dinov2 --dino-source $dinoSource --weights $weights --mixed --output $head
+python $entry evaluate --data $data --split test --model $head --dino-source $dinoSource --weights $weights --output disc-experiment/reports/multilabel_v1/dinov2_mixed_test
+python $entry predict disc-experiment/examples --model $head --dino-source $dinoSource --weights $weights --output disc-experiment/predictions/multilabel_v1.csv
+```
+
+实拍基线省略 `--mixed`，并使用新的输出路径。YOLO11n 对照使用 `--backbone yolo11n --weights yolo11n-cls.pt`，省略 `--dino-source`。评估分别汇总实拍和合成图，按实物或母图平均整组类别完全匹配率，并保存逐图预测。
+
 ## 实现边界
 
 随机按照片划分的现有工具不能保证实物隔离，也不保存追加采集的光照信息。本项目只增加一个独立脚本，复用 Ultralytics 训练、预测和混淆矩阵绘图，以及 Pillow 的补边/增强功能。登记、版本快照和分组报告集中在同一个入口，避免修改框架或创建新的训练循环。
